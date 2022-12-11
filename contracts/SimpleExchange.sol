@@ -11,6 +11,7 @@ contract SimpleExchange {
     address public partyA;
     address public partyB;
     uint256 private _expiredTime;
+    uint8 withdrawed;
 
     struct Rate {
         uint128 numerator;
@@ -61,6 +62,12 @@ contract SimpleExchange {
             _withdrawA();
         } else{
             _withdrawB();
+        }
+        withdrawed++;
+        if(withdrawed == 2) {
+            withdrawed = 0;
+            partyA = address(0);
+            partyB = address(0);
         }
     }
 
