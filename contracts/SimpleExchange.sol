@@ -2,115 +2,146 @@
 pragma solidity ^0.8.9;
 
 // Uncomment this line to use console.log
-// import "hardhat/console.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "hardhat/console.sol";
 
-contract SimpleExchange {
-    address private _tokenA;
-    address private _tokenB;
-    address public partyA;
-    address public partyB;
-    uint256 private _expiredTime;
-    uint8 withdrawed;
+contract Pool {
+    address _swapContract;    
 
-    struct Rate {
-        uint128 numerator;
-        uint128 denominator;
+    event Withdrawed(address addr, uint256 amount);
+    modifier onlySwapContract{
+        require(msg.sender == _swapContract, "invalid contract!");
+        _;
     }
 
-    Rate private _rate;
-
-    /**
-    * @dev constructor function
-    * @param expiredTime: timestamp is a Unix time stamp
-    */
-
-    constructor(address tokenA_, address tokenB_, uint128 rateNumerator, uint128 rateDenominator, uint256 expiredTime){
-        _tokenA = tokenA_;
-        _tokenB = tokenB_;
-        _rate.numerator = rateNumerator;
-        _rate.denominator = rateDenominator;
-        _expiredTime = expiredTime;
+    constructor(){
+        _swapContract = msg.sender;
     }
 
-    /**
-     * @dev agree function: users agree to this exchange;
-     * @param select: if the value is true it means sign as a partyA.
-     * if the value is false, it means sign as a partyB. 
-     */
-    function agree(bool select) external{
-        if(select){
-            require (partyA == address(0), "another one already sign this exchange");
-            partyA = msg.sender;
-        }
-        else{
-            require (partyB == address(0), "another one already sign this exchange");
-            partyB = msg.sender;
-        }
+    function withdraw(address addr, address token) public onlySwapContract{
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        IERC20(token).transfer(addr, balance);
+        emit Withdrawed(addr, balance);
+    }
+}
+
+contract GSwap is Ownable{
+    uint8 _fee;
+    mapping(uint256 => Swap) swaps;
+
+    struct Swap {
+        address tokenA;
+        address tokenB;
+        address partyA;
+        address partyB;
+        address poolAddress;
+        uint256 amountA;
+        uint256 amountB;
+        uint256 expiredTime;
+    }
+
+    
+    event CreatedSwap(
+        address tokenA, 
+        address tokenB, 
+        address creator,
+        address poolAddress,
+        uint256 amountA,
+        uint256 amountB,
+        uint256 expiredTime,
+        uint256 swapId
+    );
+
+    constructor() {
+        _fee = 1;
+    }
+
+    function getFee() public view returns (uint8){
+        return _fee;
+    }
+
+    function setFee(uint8 fee) external onlyOwner{
+        _fee = fee;
     }
     
-
     /**
-     * @dev withdraw function:
-     * if the contract is executed, users get the wanted Token
-     * If not executed and the time is expired, the initial deposited token is returned
+     * @dev partyA proposes the swap 
      */
-    function withdraw() external {
-        require(msg.sender == partyA || msg.sender == partyB, "You are not a member of this exchange");
-        require(partyA != address(0) && partyB != address(0), "Two parties do not agree with this contract");
-        if(msg.sender == partyA) {
-            _withdrawA();
-        } else{
-            _withdrawB();
-        }
-        withdrawed++;
-        if(withdrawed == 2) {
-            withdrawed = 0;
-            partyA = address(0);
-            partyB = address(0);
-        }
+    function createSwap(
+        address tokenA, 
+        address tokenB, 
+        uint256 amountA,
+        uint256 amountB, 
+        uint256 afterDays
+        ) external {
+        Pool pool = new Pool();
+        uint256 swapId =uint256(keccak256(abi.encodePacked(
+            msg.sender,
+            tokenA,
+            tokenB,
+            amountA,
+            amountB,
+            afterDays,
+            address(pool)
+            )));
+        swaps[swapId].tokenA = tokenA;
+        swaps[swapId].tokenB = tokenB;
+        swaps[swapId].amountA = amountA;
+        swaps[swapId].amountB = amountB;
+        swaps[swapId].expiredTime = block.timestamp + afterDays * (1 days);
+        swaps[swapId].partyA = msg.sender;
+        swaps[swapId].poolAddress = address(pool);
+        emit CreatedSwap(tokenA, tokenB, msg.sender, 
+                    address(pool), amountA, amountB, 
+                    swaps[swapId].expiredTime, swapId);
     }
 
     /**
-     * @dev internal withdraw function for party A:
-     */
-    function _withdrawA() internal {
-        if(checkExecuted()){
-            uint256 balanceB = IERC20(_tokenB).balanceOf(address(this));
-            IERC20(_tokenB).transfer(partyA, balanceB);
-        } else if(block.timestamp > _expiredTime){
-            uint256 balanceA = IERC20(_tokenA).balanceOf(address(this));
-            IERC20(_tokenA).transfer(partyA, balanceA);
-        } else{
-            revert ("contract is not executed yet");
-        }
+    * @dev users join the swap 
+    */  
+
+    function join(uint256 swapId) external{
+        require (msg.sender != swaps[swapId].partyA, "not allowed self-swap");
+        require (swaps[swapId].partyB != address(0), "You cannot join this swap. already filled!");
+        swaps[swapId].partyB = msg.sender;
     }
 
     /**
-     * @dev internal withdraw function for party B:
-     */
-    function _withdrawB() internal {
-        if(checkExecuted()){
-            uint256 balanceA = IERC20(_tokenA).balanceOf(address(this));
-            IERC20(_tokenA).transfer(partyB, balanceA);
-        } else if(block.timestamp > _expiredTime){
-            uint256 balanceB = IERC20(_tokenB).balanceOf(address(this));
-            IERC20(_tokenB).transfer(partyB, balanceB);
+    * @dev users withdraw the swaped token 
+    */  
+    
+    function withdraw(uint256 swapId) external {
+        require(swaps[swapId].partyA == msg.sender || swaps[swapId].partyB == msg.sender, 
+                "you are not party member!");
+        address pool = swaps[swapId].poolAddress;
+        if(checkExecuted(swapId)){
+            if(msg.sender == swaps[swapId].partyA){
+                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenB);
+            } else{
+                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenA);
+            } 
+        }else if(swaps[swapId].expiredTime > block.timestamp){
+            if(msg.sender == swaps[swapId].partyA){
+                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenA);
+            } else{
+                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenB);
+            }
         } else {
-            revert ("contract is not executed yet");
+            revert("Contract is not executed!");
         }
     }
 
     /**
-     * @dev returns the value if the contract is executed or not:
-     * true: executed;
-     * false: not executed;
-     */
-    function checkExecuted() internal view returns (bool){
-        uint256 balanceA = IERC20(_tokenA).balanceOf(address(this));
-        uint256 balanceB = IERC20(_tokenA).balanceOf(address(this));
-        if (balanceA*_rate.denominator == balanceB * _rate.numerator)return true;
-        else return false;
+    * @dev users withdraw the swaped token 
+    */  
+    
+    function checkExecuted(uint256 swapId) internal view returns (bool) {
+        if(swaps[swapId].partyB == address(0)) return false;
+        address pool = swaps[swapId].poolAddress;
+        if( IERC20(pool).balanceOf(swaps[swapId].partyA) == 0) return false;        
+        if( IERC20(pool).balanceOf(swaps[swapId].partyB) == 0) return false;
+        return true;        
     }
 
 }
