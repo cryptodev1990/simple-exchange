@@ -4,7 +4,7 @@ pragma solidity ^0.8.9;
 // Uncomment this line to use console.log
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "hardhat/console.sol";
+// import "hardhat/console.sol";
 
 contract Pool {
     address _swapContract;    
@@ -19,17 +19,16 @@ contract Pool {
         _swapContract = msg.sender;
     }
 
-    function withdraw(address addr, address token) public onlySwapContract{
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        IERC20(token).transfer(addr, balance);
-        emit Withdrawed(addr, balance);
+    function withdraw(address addr, address token, uint256 amount) public onlySwapContract{
+        IERC20(token).transfer(addr, amount);
+        emit Withdrawed(addr, amount);
     }
 }
 
 contract GSwap is Ownable{
     uint8 _fee;
     mapping(uint256 => Swap) swaps;
-
+    uint256 _swapId;
     struct Swap {
         address tokenA;
         address tokenB;
@@ -52,7 +51,9 @@ contract GSwap is Ownable{
         uint256 expiredTime,
         uint256 swapId
     );
-
+    
+    event Joined(uint256 swapId);
+    event Withdrawed(address addr, uint256 swapId);
     constructor() {
         _fee = 1;
     }
@@ -76,15 +77,7 @@ contract GSwap is Ownable{
         uint256 afterDays
         ) external {
         Pool pool = new Pool();
-        uint256 swapId =uint256(keccak256(abi.encodePacked(
-            msg.sender,
-            tokenA,
-            tokenB,
-            amountA,
-            amountB,
-            afterDays,
-            address(pool)
-            )));
+        uint256 swapId = _swapId;
         swaps[swapId].tokenA = tokenA;
         swaps[swapId].tokenB = tokenB;
         swaps[swapId].amountA = amountA;
@@ -95,6 +88,7 @@ contract GSwap is Ownable{
         emit CreatedSwap(tokenA, tokenB, msg.sender, 
                     address(pool), amountA, amountB, 
                     swaps[swapId].expiredTime, swapId);
+        _swapId++;
     }
 
     /**
@@ -103,8 +97,9 @@ contract GSwap is Ownable{
 
     function join(uint256 swapId) external{
         require (msg.sender != swaps[swapId].partyA, "not allowed self-swap");
-        require (swaps[swapId].partyB != address(0), "You cannot join this swap. already filled!");
+        require (swaps[swapId].partyB == address(0), "You cannot join this swap. already filled!");
         swaps[swapId].partyB = msg.sender;
+        emit Joined(swapId);
     }
 
     /**
@@ -117,19 +112,26 @@ contract GSwap is Ownable{
         address pool = swaps[swapId].poolAddress;
         if(checkExecuted(swapId)){
             if(msg.sender == swaps[swapId].partyA){
-                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenB);
+                uint256 amount = IERC20(swaps[swapId].tokenB).balanceOf(pool);
+                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenB, amount * (100 - _fee) / 100);
+                Pool(pool).withdraw(owner(), swaps[swapId].tokenB, amount * _fee / 100);
             } else{
-                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenA);
+                uint256 amount = IERC20(swaps[swapId].tokenA).balanceOf(pool);
+                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenA, amount * (100 - _fee) / 100);
+                Pool(pool).withdraw(owner(), swaps[swapId].tokenA, amount * _fee / 100);
             } 
-        }else if(swaps[swapId].expiredTime > block.timestamp){
+        }else if(swaps[swapId].expiredTime < block.timestamp){
             if(msg.sender == swaps[swapId].partyA){
-                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenA);
+                uint256 amount = IERC20(swaps[swapId].tokenA).balanceOf(pool);
+                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenA, amount);
             } else{
-                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenB);
+                uint256 amount = IERC20(swaps[swapId].tokenB).balanceOf(pool);
+                Pool(pool).withdraw(msg.sender, swaps[swapId].tokenB, amount);
             }
         } else {
             revert("Contract is not executed!");
         }
+        emit Withdrawed(msg.sender, swapId);
     }
 
     /**
@@ -139,9 +141,10 @@ contract GSwap is Ownable{
     function checkExecuted(uint256 swapId) internal view returns (bool) {
         if(swaps[swapId].partyB == address(0)) return false;
         address pool = swaps[swapId].poolAddress;
-        if( IERC20(pool).balanceOf(swaps[swapId].partyA) == 0) return false;        
-        if( IERC20(pool).balanceOf(swaps[swapId].partyB) == 0) return false;
-        return true;        
+        if( IERC20(swaps[swapId].tokenA).balanceOf(pool) >= swaps[swapId].amountA &&
+            IERC20(swaps[swapId].tokenB).balanceOf(pool) >= swaps[swapId].amountB
+            ) return true;        
+        return false;        
     }
 
 }
