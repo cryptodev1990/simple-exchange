@@ -38,6 +38,7 @@ contract GSwap is Ownable{
         uint256 amountA;
         uint256 amountB;
         uint256 expiredTime;
+        bool isExecuted;
     }
 
     
@@ -138,12 +139,16 @@ contract GSwap is Ownable{
     * @dev users withdraw the swaped token 
     */  
     
-    function checkExecuted(uint256 swapId) internal view returns (bool) {
+    function checkExecuted(uint256 swapId) internal returns (bool) {
         if(swaps[swapId].partyB == address(0)) return false;
+        if(swaps[swapId].isExecuted == true) return true;
         address pool = swaps[swapId].poolAddress;
         if( IERC20(swaps[swapId].tokenA).balanceOf(pool) >= swaps[swapId].amountA &&
             IERC20(swaps[swapId].tokenB).balanceOf(pool) >= swaps[swapId].amountB
-            ) return true;        
+            ) {
+                swaps[swapId].isExecuted = true;
+                return true;
+            }        
         return false;        
     }
 
