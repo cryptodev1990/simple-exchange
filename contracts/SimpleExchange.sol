@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 // import "hardhat/console.sol";
 
 contract Pool {
-    address _swapContract;    
+    address _swapContract;
 
     event Withdrawed(address addr, uint256 amount);
     modifier onlySwapContract{
@@ -86,8 +86,8 @@ contract GSwap is Ownable{
         swaps[swapId].expiredTime = block.timestamp + afterDays * (1 days);
         swaps[swapId].partyA = msg.sender;
         swaps[swapId].poolAddress = address(pool);
-        emit CreatedSwap(tokenA, tokenB, msg.sender, 
-                    address(pool), amountA, amountB, 
+        emit CreatedSwap(tokenA, tokenB, msg.sender,
+                    address(pool), amountA, amountB,
                     swaps[swapId].expiredTime, swapId);
         _swapId++;
     }
